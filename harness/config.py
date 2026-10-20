@@ -7,6 +7,7 @@ TOP_KEYS = {"org", "human", "roles", "channels", "kinds", "workflow", "gates",
 ROLE_KEYS = {"title", "prompt", "responsibilities", "reports_to", "can_message", "can_assign",
              "model", "tools", "owns", "workspace", "decides", "limits"}
 AUTONOMY = ("ask-often", "balanced", "autonomous")
+HOOK_EVENTS = ("on_gate", "on_transition", "on_finish")
 
 
 class ConfigError(Exception):
@@ -144,6 +145,10 @@ def validate(cfg, org_dir, errs):
         for k in g.get("kinds", []):
             if k not in (cfg.get("kinds") or []):
                 errs.append(f"gates[{i}].kinds: '{k}' not in top-level kinds")
+
+    for ev in cfg.get("hooks") or {}:
+        if ev not in HOOK_EVENTS:
+            errs.append(f"hooks.{ev}: unknown event (allowed: {', '.join(HOOK_EVENTS)})")
 
     esc = cfg.get("escalation") or {}
     cats = esc.get("categories") or {}

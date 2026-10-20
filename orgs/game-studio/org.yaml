@@ -1,0 +1,132 @@
+org:
+  name: game-studio
+  description: A small game studio that turns a design goal into a playable, tested build.
+  autonomy: balanced
+  context: [context/pillars.md]
+human:
+  title: Studio Head
+  reports: [producer]
+  approves: [scope_change, irreversible, lead_conflict]
+roles:
+  producer:
+    title: Producer
+    responsibilities: Turn the goal into a plan and tasks, keep the leads aligned, own schedule and scope, and settle conflicts between leads.
+    prompt: prompts/producer.md
+    reports_to: human
+    can_message: ["@all"]
+    can_assign: ["@all"]
+    model: opus
+    tools: [Read, Grep, Glob]
+    decides: [scope_change]
+  creative-director:
+    title: Creative Director
+    responsibilities: Own the vision and player experience. Review design and narrative work against the pillars.
+    reports_to: producer
+    can_message: ["@reports", producer, technical-director, art-director, qa-lead]
+    can_assign: ["@reports"]
+    model: opus
+    tools: [Read, Grep, Glob]
+  game-designer:
+    title: Game Designer
+    responsibilities: Write mechanics, rules and tuning specs.
+    reports_to: creative-director
+    can_message: [narrative-designer, gameplay-engineer, art-director]
+    model: sonnet
+    tools: [Read, Grep, Glob, Write]
+    owns: ["design/**"]
+  narrative-designer:
+    title: Narrative Designer
+    responsibilities: Write story, dialogue and world text consistent with the pillars.
+    reports_to: creative-director
+    can_message: [game-designer, art-director]
+    model: sonnet
+    tools: [Read, Grep, Glob, Write]
+    owns: ["narrative/**"]
+  technical-director:
+    title: Technical Director
+    responsibilities: Own architecture and code quality. Review engineering work and assign it to the right engineer.
+    reports_to: producer
+    can_message: ["@reports", producer, creative-director, art-director, qa-lead]
+    can_assign: ["@reports"]
+    model: opus
+    tools: [Read, Grep, Glob]
+    decides: [design_choice]
+  gameplay-engineer:
+    title: Gameplay Engineer
+    responsibilities: Implement gameplay features from design specs, with tests.
+    reports_to: technical-director
+    can_message: [game-designer, systems-engineer, tools-engineer, qa-lead]
+    model: sonnet
+    tools: [Read, Grep, Glob, Edit, Write, "Bash(git *)", "Bash(npm *)"]
+    owns: ["src/gameplay/**"]
+    workspace: worktree
+  systems-engineer:
+    title: Systems / Network Engineer
+    responsibilities: Implement core systems, networking and performance-critical code, with tests.
+    reports_to: technical-director
+    can_message: [gameplay-engineer, tools-engineer, qa-lead]
+    model: sonnet
+    tools: [Read, Grep, Glob, Edit, Write, "Bash(git *)", "Bash(npm *)"]
+    owns: ["src/systems/**"]
+    workspace: worktree
+  tools-engineer:
+    title: Tools / Build Engineer
+    responsibilities: Own build pipeline, editor tooling and automation.
+    reports_to: technical-director
+    can_message: [gameplay-engineer, systems-engineer, qa-lead]
+    model: sonnet
+    tools: [Read, Grep, Glob, Edit, Write, "Bash(git *)", "Bash(npm *)"]
+    owns: ["tools/**", "build/**"]
+    workspace: worktree
+  art-director:
+    title: Art Director
+    responsibilities: Own the visual style. Specify and review art assets and their integration.
+    reports_to: producer
+    can_message: ["@all"]
+    model: sonnet
+    tools: [Read, Grep, Glob, Write]
+    owns: ["art/**"]
+  qa-lead:
+    title: QA Lead
+    responsibilities: Verify work against acceptance criteria and the pillars. You are the gatekeeper for "done".
+    prompt: prompts/qa-lead.md
+    reports_to: producer
+    can_message: ["@all"]
+    model: sonnet
+    tools: [Read, Grep, Glob, "Bash(npm test *)"]
+channels:
+  leads: [producer, creative-director, technical-director, art-director, qa-lead]
+  eng: [technical-director, gameplay-engineer, systems-engineer, tools-engineer, qa-lead]
+kinds: [design, narrative, code, art, tools]
+workflow:
+  initial: todo
+  states:
+    todo: {}
+    in-progress: {}
+    review: {}
+    qa: {}
+    done: {terminal: true, merge: true}
+  transitions:
+    - {from: todo, to: in-progress, by: [owner]}
+    - {from: in-progress, to: review, by: [owner]}
+    - {from: review, to: qa, by: [any]}
+    - {from: qa, to: done, by: [any]}
+    - {from: review, to: in-progress, by: [any]}
+    - {from: qa, to: in-progress, by: [any]}
+gates:
+  - {name: design-review, transition: "review->qa", kinds: [design, narrative], signoff: [creative-director], approvals: 1, on_reject: in-progress}
+  - {name: tech-review, transition: "review->qa", kinds: [code, tools], signoff: [technical-director], approvals: 1, on_reject: in-progress}
+  - {name: art-review, transition: "review->qa", kinds: [art], signoff: [art-director], approvals: 1, on_reject: in-progress}
+  - {name: qa, transition: "qa->done", signoff: [qa-lead], approvals: 1, on_reject: in-progress}
+escalation:
+  categories:
+    scope_change: {to: producer}
+    design_choice: {to: technical-director}
+    lead_conflict: {to: human}
+    irreversible: {to: human}
+  always_human: [irreversible, lead_conflict]
+  autonomy:
+    ask-often: all
+    balanced: [scope_change]
+    autonomous: []
+limits: {parallel: 3, max_ticks: 150, stall_ticks: 6, pingpong: 8}

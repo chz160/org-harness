@@ -1,0 +1,47 @@
+# Minimal blank org. Copy this folder to orgs/<your-org>/, rename things, run:
+#   python3 -m harness validate <your-org>
+org:
+  name: my-org                   # must be unique; used in run folder names
+  description: One sentence about what this org does.
+  autonomy: balanced             # ask-often | balanced | autonomous (override per run with --autonomy)
+  # context: [context/rules.md]  # optional files every agent reads
+human:
+  title: Boss                    # what you are called in this org
+  reports: [lead]                # roles that report to you; they receive the goal
+roles:
+  lead:
+    title: Lead
+    responsibilities: Break the goal into tasks, assign them, accept the results.
+    reports_to: human
+    can_message: ["@all"]
+    can_assign: ["@all"]
+    tools: [Read, Grep, Glob]
+    # prompt: prompts/lead.md    # optional persona file
+    # model: opus
+    # owns: ["some/dir/**"]      # files this role may edit (blocks edits elsewhere)
+    # workspace: worktree        # own git branch + checkout
+    # decides: [some_category]   # escalation categories it can settle alone
+  worker:
+    title: Worker
+    responsibilities: Do the tasks you are given and report back.
+    reports_to: lead
+    can_message: [lead]
+    tools: [Read, Grep, Glob, Edit, Write]
+workflow:
+  initial: todo
+  states:
+    todo: {}
+    doing: {}
+    done: {terminal: true}
+  transitions:
+    - {from: todo, to: doing, by: [owner]}
+    - {from: doing, to: done, by: [owner]}
+# Optional: require a sign-off before a transition counts.
+# gates:
+#   - {name: accept, transition: "doing->done", signoff: [lead], approvals: 1, on_reject: doing}
+escalation:
+  categories:
+    needs_decision: {to: human}
+  always_human: []
+  autonomy: {ask-often: all, balanced: [needs_decision], autonomous: []}
+limits: {parallel: 3, max_ticks: 60, stall_ticks: 6, pingpong: 8}

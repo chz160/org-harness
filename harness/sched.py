@@ -9,7 +9,10 @@ from .org import HUMAN
 
 
 def _sig(ctx, role):
-    mine = [(t["id"], t["status"], t["owner"]) for t in board.all_tasks(ctx)
+    tasks = board.all_tasks(ctx)
+    state = {t["id"]: t["status"] for t in tasks}
+    mine = [(t["id"], t["status"], t["owner"], all(ctx.is_terminal(state.get(d, "")) for d in t["deps"]))
+            for t in tasks
             if t["owner"] == role and not ctx.is_terminal(t["status"]) and not t["blocked"] and not t["awaiting_human"]]
     return json.dumps(mine)
 
@@ -32,11 +35,39 @@ def start(ctx):
         bus._deliver(ctx, HUMAN, [r], ctx.meta["goal"], "goal")
 
 
+def _progress(ctx):
+    """A number that changes whenever any task changes state, owner or flag, or an ADR is added."""
+    n = sum(len(t["history"]) for t in board.all_tasks(ctx))
+    d = ctx.run.p("decisions")
+    return n + (len(list(d.glob("*.md"))) if d.exists() else 0)
+
+
+def _pingpong(ctx, since_msg, limit):
+    """Pair of roles that exchanged `limit`+ direct messages since the last progress."""
+    pairs = {}
+    for m in ctx.run.read_jsonl("messages.jsonl")[since_msg:]:
+        if m["kind"] == "dm":
+            k = tuple(sorted((m["from"], m["to"])))
+            pairs[k] = pairs.get(k, 0) + 1
+    return next((k for k, v in pairs.items() if v >= limit), None)
+
+
+def _trip(ctx, category, text):
+    bus._deliver(ctx, "engine", [HUMAN], text, "escalation", None, extra={"category": category})
+
+
 def loop(ctx, max_ticks=50, parallel=3, runner=agent.run_turn):
-    started = time.time()
+    lim = ctx.cfg.get("limits", {})
+    deadline = time.time() + lim["max_minutes"] * 60 if lim.get("max_minutes") else None
+    stall_n, pp_n = lim.get("stall_ticks", 6), lim.get("pingpong", 8)
+    last, idle_ticks, mark = _progress(ctx), 0, len(ctx.run.read_jsonl("messages.jsonl"))
     for tick in range(1, max_ticks + 1):
+        if ctx.run.p("state", "paused").exists():
+            return "paused"
         if finished(ctx):
             return "done"
+        if deadline and time.time() > deadline:
+            return "time-limit"
         if bus.open_escalations(ctx) and not any(wants_wake(ctx, r) for r in ctx.roles):
             return "needs-human"
         wake = [r for r in ctx.roles if wants_wake(ctx, r)]
@@ -46,6 +77,18 @@ def loop(ctx, max_ticks=50, parallel=3, runner=agent.run_turn):
             list(ex.map(lambda r: runner(ctx, r, tick), wake))
         for r in wake:  # remember post-run state so a role only re-wakes on outside changes
             ctx.run.write(f"state/sig_{r}.json", _sig(ctx, r))
+        now = _progress(ctx)
+        if now != last:
+            last, idle_ticks, mark = now, 0, len(ctx.run.read_jsonl("messages.jsonl"))
+            continue
+        idle_ticks += 1
+        pair = _pingpong(ctx, mark, pp_n)
+        if pair:
+            _trip(ctx, "loop", f"{pair[0]} and {pair[1]} have exchanged {pp_n}+ messages with no task progress. Redirect them or decide for them.")
+            return "loop-detected"
+        if idle_ticks >= stall_n:
+            _trip(ctx, "stall", f"{idle_ticks} ticks passed with no task progress. Roles woken last: {', '.join(wake)}.")
+            return "stalled"
     return "max-ticks"
 
 

@@ -12,9 +12,15 @@ counter.parent.mkdir(exist_ok=True)
 n = int(counter.read_text()) if counter.exists() else 0
 counter.write_text(str(n + 1))
 steps = (scenario["wakes"].get(role) or [])
-steps = steps[n] if n < len(steps) else []
+steps = steps[n] if n < len(steps) else (scenario.get("repeat") or {}).get(role, [])
 for step in steps:
     must_fail = step.startswith("!")
+    if step.startswith("sh:"):  # run a shell command in the agent's working directory (worktree)
+        p = subprocess.run(step[3:], shell=True, capture_output=True, text=True)
+        if p.returncode:
+            print(f"SCENARIO MISMATCH: {step!r}: {p.stderr}", file=sys.stderr)
+            sys.exit(3)
+        continue
     argv = [sys.executable, "-m", "harness"] + shlex.split(step.lstrip("!"))
     p = subprocess.run(argv, capture_output=True, text=True)
     if (p.returncode != 0) != must_fail:

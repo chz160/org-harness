@@ -32,10 +32,15 @@ def parser():
 
     add("validate", ("org", {}))
     add("run", ("--org", {"required": True}), ("--goal", {"required": True}), ("--autonomy", {}),
-        ("--parallel", {"type": int}), ("--max-ticks", {"type": int, "default": 50}),
+        ("--parallel", {"type": int}), ("--max-ticks", {"type": int}),
         ("--root", {"default": "runs"}), ("--run-id", {}), ("--workdir", {}),
+        ("--auto-merge", {"action": "store_true", "help": "merge a role's branch when its task enters a merge state"}),
         ("--no-agents", {"action": "store_true", "help": "set up the run and exit"}))
-    add("resume", ("path", {}), ("--max-ticks", {"type": int, "default": 50}), ("--parallel", {"type": int}))
+    add("resume", ("path", {}), ("--max-ticks", {"type": int}), ("--parallel", {"type": int}))
+    add("pause", help="stop the scheduler at the next tick (the run can be resumed)")
+    add("redirect", ("text", {}), ("--to", {}), help="send new direction to the leads (or --to ROLE)")
+    add("veto", ("id", {}), ("--note", {"required": True}), help="stop a task and tell its owner")
+    add("watch", help="follow the live event log")
     add("msg", ("target", {}), ("text", {}), ("--task", {}))
     add("inbox", ("--peek", {"action": "store_true"}))
     t = s.add_parser("task").add_subparsers(dest="sub", required=True)
@@ -103,19 +108,22 @@ def dispatch(a):
         if auto not in config.AUTONOMY:
             raise HarnessError(f"--autonomy must be one of {config.AUTONOMY}")
         run = store.create(a.root, cfg["org"]["name"], org_dir.resolve(), a.goal, auto, a.run_id)
+        meta = run.read("run.json")
         if a.workdir:
-            meta = run.read("run.json")
             meta["workdir"] = str(pathlib.Path(a.workdir).resolve())
-            run.write("run.json", meta)
+        meta["auto_merge"] = a.auto_merge
+        run.write("run.json", meta)
         ctx = Ctx(run.path)
         sched.start(ctx)
         print(f"run: {run.path}")
         if a.no_agents:
             return 0
-        return drive(ctx, a.max_ticks, a.parallel or cfg.get("limits", {}).get("parallel", 3))
+        return drive(ctx, a.max_ticks, a.parallel)
     if c == "resume":
         ctx = Ctx(a.path)
-        return drive(ctx, a.max_ticks, a.parallel or ctx.cfg.get("limits", {}).get("parallel", 3))
+        ctx.run.p("state", "paused").unlink(missing_ok=True)
+        ctx.run.log(HUMAN, "resume")
+        return drive(ctx, a.max_ticks, a.parallel)
 
     ctx = need_ctx(a)
     who = a.who
@@ -144,6 +152,25 @@ def dispatch(a):
         print(board.render(ctx))
         for m in bus.open_escalations(ctx):
             print(f"! needs you: {m['id']} from {m['from']} [{m['category']}]: {m['text']}")
+    elif c == "pause":
+        ctx.run.p("state").mkdir(exist_ok=True)
+        ctx.run.p("state", "paused").write_text(store.now())
+        ctx.run.log(who, "pause requested")
+        print("pause requested; the run stops after the current tick. `resume <run-dir>` continues it.")
+    elif c == "redirect":
+        if who != HUMAN:
+            raise HarnessError("only the " + ctx.title(HUMAN) + " can redirect")
+        with ctx.run.lock():
+            meta = ctx.run.read("run.json")
+            meta["goal"] += f"\n[redirected {store.now()}] {a.text}"
+            ctx.run.write("run.json", meta)
+        for m in bus._deliver(ctx, HUMAN, [a.to] if a.to else ctx.reports_of(HUMAN), a.text, "redirect"):
+            print("sent", m["id"], "to", m["to"])
+    elif c == "veto":
+        board.veto(ctx, who, a.id, a.note)
+        print(f"{a.id} vetoed")
+    elif c == "watch":
+        watch(ctx)
     elif c == "summary":
         print(sched.summary(ctx, "snapshot"))
     return 0
@@ -172,9 +199,29 @@ def task_cmd(ctx, who, a):
         print(f"{t['id']} is now '{t['status']}'")
 
 
+def watch(ctx):
+    import time
+    f = ctx.run.p("events.log")
+    pos = 0
+    try:
+        while True:
+            if f.exists():
+                with open(f, encoding="utf-8") as fh:
+                    fh.seek(pos)
+                    chunk = fh.read()
+                    pos = fh.tell()
+                if chunk:
+                    print(chunk, end="", flush=True)
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+
+
 def drive(ctx, max_ticks, parallel):
-    status = sched.loop(ctx, max_ticks, parallel)
+    lim = ctx.cfg.get("limits", {})
+    status = sched.loop(ctx, max_ticks or lim.get("max_ticks", 50), parallel or lim.get("parallel", 3))
     text = sched.summary(ctx, status)
+    board.run_hook(ctx, "on_finish", status=status)
     print(text)
     return 0
 

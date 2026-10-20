@@ -6,7 +6,7 @@ import pathlib
 import subprocess
 import sys
 
-from . import board, bus
+from . import board, bus, worktree
 from .org import HUMAN
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -50,7 +50,8 @@ Review gates:
 Escalation categories:
 {cats}
 Rules: act only through the command above; the engine rejects anything outside your role. Finish by
-saying what you did and what you are waiting on. Do not do other roles' work; message or assign instead.""")
+saying what you did and what you are waiting on. If you work in a git worktree, commit your work on your
+branch before you move a task on. Do not do other roles' work; message or assign instead.""")
     return "\n\n".join(parts)
 
 
@@ -81,6 +82,8 @@ def run_turn(ctx, role, tick):
            "--output-format", "json", "--permission-mode", "dontAsk"]
     if r.get("model"):
         cmd += ["--model", r["model"]]
+    if ctx.cfg["org"].get("deny_tools"):
+        cmd += ["--disallowedTools", ",".join(ctx.cfg["org"]["deny_tools"])]
     sid_f = f"agents/{role}.session"
     sid = ctx.run.p(sid_f).read_text().strip() if ctx.run.p(sid_f).exists() else None
     if sid:
@@ -90,7 +93,7 @@ def run_turn(ctx, role, tick):
                PYTHONPATH=str(ROOT) + os.pathsep + env.get("PYTHONPATH", ""))
     ctx.run.log("engine", f"wake {role} (tick {tick})")
     try:
-        p = subprocess.run(cmd, cwd=ctx.meta.get("workdir") or os.getcwd(), env=env, capture_output=True,
+        p = subprocess.run(cmd, cwd=worktree.ensure(ctx, role), env=env, capture_output=True,
                            text=True, timeout=lim.get("max_minutes", 20) * 60)
     except subprocess.TimeoutExpired:
         ctx.run.log("engine", f"{role} timed out")

@@ -1,6 +1,23 @@
 """Shared task board, workflow transitions and review gates. All rules come from org.yaml."""
-from . import bus, store
+import os
+import subprocess
+
+from . import bus, store, worktree
 from .org import HUMAN, HarnessError
+
+
+def run_hook(ctx, event, **env):
+    """Org-supplied shell command for `event`, run inside the org folder. Returns (ok, output).
+    This is the only place domain behaviour plugs in (run tests, call a scanner, ...)."""
+    cmd = (ctx.cfg.get("hooks") or {}).get(event)
+    if not cmd:
+        return True, ""
+    e = dict(os.environ, HARNESS_RUN=str(ctx.run.path), HARNESS_EVENT=event,
+             **{k.upper(): str(v) for k, v in env.items()})
+    p = subprocess.run(cmd, shell=True, cwd=ctx.cfg["_dir"], env=e, capture_output=True, text=True, timeout=600)
+    out = (p.stdout + p.stderr).strip()
+    ctx.run.log("hook", f"{event} exit={p.returncode} {out[:120]}")
+    return p.returncode == 0, out
 
 
 def _path(tid):
@@ -129,12 +146,20 @@ def move(ctx, who, tid, to):
         t = get(ctx, tid)
         _check_transition(ctx, who, t, to)
         _apply_move(ctx, who, t, to)
-    _notify_reviewers(ctx, t)
+    _after_move(ctx, t)
     return t
 
 
-def _notify_reviewers(ctx, t):
-    """Entering a state that has outgoing gates tells the sign-off roles their review is due."""
+def _after_move(ctx, t):
+    """Entering a state: run the org's transition hook, tell the sign-off roles a review is due, and
+    merge the owner's branch if the state is flagged `merge` and the run used --auto-merge."""
+    run_hook(ctx, "on_transition", task=t["id"], status=t["status"], owner=t["owner"] or "")
+    owner = t["owner"]
+    if ctx.states[t["status"]].get("merge") and ctx.meta.get("auto_merge") and owner in ctx.roles:
+        err = worktree.merge(ctx, owner)
+        if err:
+            set_flag(ctx, t["id"], blocked=f"merge failed: {err}")
+            bus._deliver(ctx, "engine", [owner], f"{t['id']} could not be merged: {err}", "blocked", t["id"])
     for g in ctx.cfg.get("gates") or []:
         if g["transition"].startswith(t["status"] + "->") and (not g.get("kinds") or t["kind"] in g["kinds"]):
             bus._deliver(ctx, "engine", [r for r in g["signoff"] if r != t["owner"]],
@@ -152,11 +177,23 @@ def _apply_move(ctx, who, t, to):
 def review(ctx, who, tid, verdict, note=""):
     """Gate sign-off. approve: counts toward the gate and fires the transition once satisfied.
     reject: sends the task to the gate's on_reject state and delivers feedback to the owner."""
+    if verdict == "approve":  # org check (e.g. run the tests) happens outside the state lock
+        t0 = get(ctx, tid)
+        g0 = next((g for g in ctx.cfg.get("gates") or [] if g["transition"].startswith(t0["status"] + "->")
+                   and (not g.get("kinds") or t0["kind"] in g["kinds"]) and (who in g["signoff"] or who == HUMAN)), None)
+        if g0:
+            ok, out = run_hook(ctx, "on_gate", task=tid, gate=g0["name"], who=who, kind=t0["kind"] or "",
+                               workdir=worktree.base_dir(ctx))
+            if not ok:
+                raise HarnessError(f"gate '{g0['name']}' check failed, approval not recorded: {out[-400:]}")
     with ctx.run.lock():
         t = get(ctx, tid)
+        before = t["status"]
         gates = [g for g in ctx.cfg.get("gates") or []
                  if g["transition"].startswith(t["status"] + "->") and (not g.get("kinds") or t["kind"] in g["kinds"])]
-        g = next((g for g in gates if who in g["signoff"]), None)
+        if who == t["owner"] and who != HUMAN:
+            raise HarnessError(f"{tid}: you own this task, so you cannot review it. Ask another sign-off role")
+        g = next((g for g in gates if who in g["signoff"] or who == HUMAN), None)
         if not g:
             need = sorted({r for g in gates for r in g["signoff"]})
             raise HarnessError(f"{tid} in '{t['status']}' has no review for role '{who}'. "
@@ -172,12 +209,24 @@ def review(ctx, who, tid, verdict, note=""):
             t["approvals"] = [a for a in t["approvals"] if a["by"] != who] + [{"gate": g["name"], "by": who, "ts": store.now(), "note": note}]
             _save(ctx, t, who, f"gate '{g['name']}' approved" + (f": {note}" if note else ""))
             have = len({a["by"] for a in t["approvals"]})
-            if have >= g.get("approvals", 1):
+            if have >= g.get("approvals", 1) or who == HUMAN:  # a human approval always satisfies the gate
                 _apply_move(ctx, who, t, g["transition"].split("->")[1])
             owner = None
     if verdict == "reject" and owner:  # feedback always reaches the owner, whatever the DM rules say
         bus._deliver(ctx, who, [owner], f"{tid} sent back by gate '{g['name']}': {note}", "feedback", tid)
-    _notify_reviewers(ctx, t)
+    if t["status"] != before:
+        _after_move(ctx, t)
+    return t
+
+
+def veto(ctx, who, tid, note):
+    """Human stops a task: it is blocked with the reason and the owner is told."""
+    if who != HUMAN:
+        raise HarnessError("only the " + ctx.cfg["human"]["title"] + " can veto")
+    t = get(ctx, tid)
+    set_flag(ctx, tid, blocked=f"vetoed by {ctx.title(HUMAN)}: {note}")
+    if t["owner"]:
+        bus._deliver(ctx, HUMAN, [t["owner"]], f"{tid} vetoed: {note}", "veto", tid)
     return t
 
 

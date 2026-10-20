@@ -1,0 +1,26 @@
+goal: Prototype a dash-and-dodge mechanic.
+expect_end: done
+wakes:
+  producer:
+    - - decide "Scope" --context "Prototype only." --decision "One dash with a cooldown; no new art."
+      - task new "Dash mechanic spec" --owner game-designer --kind design --accept "Cooldown and distance are specified"
+      - task new "Implement dash" --owner gameplay-engineer --kind code --dep T001 --accept "Dash moves the player; unit test passes"
+  game-designer:
+    - - task move T001 in-progress
+      - task move T001 review
+      - '!review approve T001'
+  creative-director:
+    - - review approve T001 --note "Fits the pillars."
+  gameplay-engineer:
+    - - '!task move T002 in-progress'
+    - - task move T002 in-progress
+      - task move T002 review
+  technical-director:
+    - - review reject T002 --note "Dash ignores the cooldown; add a test."
+    - - review approve T002 --note "Good."
+  qa-lead:
+    - - review approve T001 --note "Spec checks out."
+    - - review approve T002 --note "Dash works; cooldown honoured."
+repeat:
+  gameplay-engineer:
+    - task move T002 review
