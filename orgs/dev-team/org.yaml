@@ -1,0 +1,94 @@
+org:
+  name: dev-team
+  description: A generic software team that plans, builds, reviews and tests a change.
+  autonomy: balanced
+  context: [context/standards.md]
+human:
+  title: Product Owner
+  reports: [tech-lead]
+  approves: [scope_change, irreversible]
+roles:
+  tech-lead:
+    title: Tech Lead
+    responsibilities: Turn the goal into small tasks with acceptance criteria, assign them, unblock people, and decide technical questions.
+    prompt: prompts/tech-lead.md
+    reports_to: human
+    can_message: ["@all"]
+    can_assign: ["@reports", "@all"]
+    model: opus
+    tools: [Read, Grep, Glob]
+    decides: [design_choice]
+  backend-dev:
+    title: Backend Developer
+    responsibilities: Implement server-side tasks and write their tests.
+    reports_to: tech-lead
+    can_message: [frontend-dev, mobile-dev, reviewer, qa]
+    model: sonnet
+    tools: [Read, Grep, Glob, Edit, Write, "Bash(npm *)", "Bash(git *)"]
+    owns: ["server/**", "api/**"]
+    workspace: worktree
+  frontend-dev:
+    title: Frontend Developer
+    responsibilities: Implement web UI tasks and their tests.
+    reports_to: tech-lead
+    can_message: [backend-dev, mobile-dev, reviewer, qa]
+    model: sonnet
+    tools: [Read, Grep, Glob, Edit, Write, "Bash(npm *)", "Bash(git *)"]
+    owns: ["web/**"]
+    workspace: worktree
+  mobile-dev:
+    title: Mobile Developer
+    responsibilities: Implement mobile app tasks and their tests.
+    reports_to: tech-lead
+    can_message: [backend-dev, frontend-dev, reviewer, qa]
+    model: sonnet
+    tools: [Read, Grep, Glob, Edit, Write, "Bash(npm *)", "Bash(git *)"]
+    owns: ["mobile/**"]
+    workspace: worktree
+  reviewer:
+    title: Code Reviewer
+    responsibilities: Review code for correctness, clarity and standards. Reject with specific, actionable feedback.
+    reports_to: tech-lead
+    can_message: [backend-dev, frontend-dev, mobile-dev, qa]
+    model: sonnet
+    tools: [Read, Grep, Glob, "Bash(git diff *)", "Bash(git log *)"]
+  qa:
+    title: QA Engineer
+    responsibilities: Verify each task against its acceptance criteria. You are the gatekeeper for "done".
+    prompt: prompts/qa.md
+    reports_to: tech-lead
+    can_message: [backend-dev, frontend-dev, mobile-dev, reviewer]
+    model: sonnet
+    tools: [Read, Grep, Glob, "Bash(npm test *)"]
+channels:
+  eng: [backend-dev, frontend-dev, mobile-dev, reviewer, qa, tech-lead]
+kinds: [code, docs]
+workflow:
+  initial: todo
+  states:
+    todo: {}
+    in-progress: {}
+    review: {}
+    testing: {}
+    done: {terminal: true, merge: true}
+  transitions:
+    - {from: todo, to: in-progress, by: [owner]}
+    - {from: in-progress, to: review, by: [owner]}
+    - {from: review, to: testing, by: [any]}
+    - {from: testing, to: done, by: [any]}
+    - {from: review, to: in-progress, by: [any]}
+    - {from: testing, to: in-progress, by: [any]}
+gates:
+  - {name: code-review, transition: "review->testing", kinds: [code], signoff: [reviewer], approvals: 1, on_reject: in-progress}
+  - {name: qa, transition: "testing->done", signoff: [qa], approvals: 1, on_reject: in-progress}
+escalation:
+  categories:
+    scope_change: {to: tech-lead}
+    design_choice: {to: tech-lead}
+    irreversible: {to: human}
+  always_human: [irreversible]
+  autonomy:
+    ask-often: all
+    balanced: [scope_change, irreversible]
+    autonomous: []
+limits: {parallel: 3, max_ticks: 100, stall_ticks: 6, pingpong: 8}
