@@ -1,0 +1,16 @@
+goal: Assess the login flow of the target app. Scope is in scope.md.
+expect_end: done
+wakes:
+  engagement-lead:
+    - - decide "Scope and rules" --context "Client scope.md" --decision "Login flow only; no destructive testing."
+      - 'task new "Review session handling in the login flow" --owner appsec-reviewer --kind finding --accept "Evidence: file:line and reasoning"'
+    - - review approve T001 --note "Release to report."
+  appsec-reviewer:
+    - - task move T001 testing
+      - task move T001 finding
+      - '!msg report-writer "write it up"'
+      - '!task move T001 verified'
+    - - task move T001 finding
+  verifier:
+    - - review reject T001 --note "No evidence given for the session fixation claim."
+    - - review approve T001 --note "Reproduced from the evidence."

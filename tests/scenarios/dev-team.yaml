@@ -1,0 +1,20 @@
+goal: Add a /health endpoint that returns 200.
+expect_end: done
+wakes:
+  tech-lead:
+    - - task new "Add /health endpoint" --owner backend-dev --kind code --accept "GET /health returns 200"
+      - '!task new "Bogus" --owner backend-dev --kind nonsense'
+      - decide "Keep it dependency-free" --context "No framework for one route." --decision "Use the stdlib router."
+  backend-dev:
+    - - task move T001 in-progress
+      - task move T001 review
+      - '!task move T001 done'
+      - '!msg @all "hello everyone"'
+    - - task move T001 review
+  reviewer:
+    - - '!review approve T999'
+      - review reject T001 --note "Handler ignores HEAD requests; add a test."
+    - - review approve T001 --note "Looks right."
+  qa:
+    - - '!task move T001 done'
+      - review approve T001 --note "GET /health returned 200."

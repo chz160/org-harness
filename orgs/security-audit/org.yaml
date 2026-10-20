@@ -1,0 +1,100 @@
+org:
+  name: security-audit
+  description: A scoped, non-destructive security assessment of a target codebase and its configuration.
+  autonomy: balanced
+  context: [context/rules-of-engagement.md]
+human:
+  title: Engagement Owner
+  reports: [engagement-lead]
+  approves: [out_of_scope, destructive, scope_change]
+roles:
+  engagement-lead:
+    title: Engagement Lead
+    responsibilities: Own scope and the rules of engagement. Plan the work, assign it, and keep every action inside scope.
+    prompt: prompts/engagement-lead.md
+    reports_to: human
+    can_message: ["@all"]
+    can_assign: ["@all"]
+    model: opus
+    tools: [Read, Grep, Glob]
+    decides: [scope_clarification]
+  recon:
+    title: Recon / Threat Modeler
+    responsibilities: Map the attack surface and write a threat model. Read-only.
+    reports_to: engagement-lead
+    can_message: [appsec-reviewer, infra-reviewer]
+    model: sonnet
+    tools: [Read, Grep, Glob, Write]
+    owns: ["findings/recon/**"]
+  appsec-reviewer:
+    title: AppSec Reviewer
+    responsibilities: Review code for auth, session and input-handling flaws. Every finding needs evidence (file:line and a reproduction or reasoning).
+    reports_to: engagement-lead
+    can_message: [recon, infra-reviewer, remediation-engineer]
+    model: sonnet
+    tools: [Read, Grep, Glob, Write, "Bash(semgrep *)"]
+    owns: ["findings/appsec/**"]
+  infra-reviewer:
+    title: Infrastructure / Config Reviewer
+    responsibilities: Review configuration, dependencies and deployment files. Read-only on the target.
+    reports_to: engagement-lead
+    can_message: [recon, appsec-reviewer, remediation-engineer]
+    model: sonnet
+    tools: [Read, Grep, Glob, Write, "Bash(semgrep *)", "Bash(trivy *)"]
+    owns: ["findings/infra/**"]
+  remediation-engineer:
+    title: Remediation Engineer
+    responsibilities: Fix confirmed findings with minimal, tested changes.
+    reports_to: engagement-lead
+    can_message: [appsec-reviewer, infra-reviewer, verifier]
+    model: sonnet
+    tools: [Read, Grep, Glob, Edit, Write, "Bash(git *)"]
+    workspace: worktree
+  verifier:
+    title: Verifier
+    responsibilities: Independently confirm each fix. You never verify your own work. You are the gate for closing a finding.
+    prompt: prompts/verifier.md
+    reports_to: engagement-lead
+    can_message: [remediation-engineer, appsec-reviewer, infra-reviewer]
+    model: sonnet
+    tools: [Read, Grep, Glob]
+  report-writer:
+    title: Report Writer
+    responsibilities: Write the final report from verified findings only.
+    reports_to: engagement-lead
+    can_message: [engagement-lead]
+    model: sonnet
+    tools: [Read, Grep, Glob, Write]
+    owns: ["report/**"]
+channels:
+  audit: "*"
+kinds: [finding]
+workflow:
+  initial: scoped
+  states:
+    scoped: {}
+    testing: {}
+    finding: {}
+    verified: {}
+    reported: {terminal: true}
+  transitions:
+    - {from: scoped, to: testing, by: [owner]}
+    - {from: testing, to: finding, by: [owner]}
+    - {from: finding, to: verified, by: [any]}
+    - {from: verified, to: reported, by: [any]}
+    - {from: finding, to: testing, by: [any]}
+gates:
+  - {name: independent-verification, transition: "finding->verified", kinds: [finding], signoff: [verifier], approvals: 1, on_reject: testing}
+  - {name: lead-release, transition: "verified->reported", signoff: [engagement-lead], approvals: 1, on_reject: finding}
+escalation:
+  categories:
+    scope_clarification: {to: engagement-lead}
+    out_of_scope: {to: human}
+    destructive: {to: human}
+    scope_change: {to: engagement-lead}
+  always_human: [out_of_scope, destructive]
+  autonomy:
+    ask-often: all
+    balanced: [scope_change]
+    autonomous: []
+limits: {parallel: 3, max_ticks: 100, stall_ticks: 6, pingpong: 8}
